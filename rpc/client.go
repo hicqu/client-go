@@ -101,18 +101,21 @@ func (c *batchCommandsClient) batchRecvLoop() {
 		// When `conn.Close()` is called, `client.Recv()` will return an error.
 		resp, err := c.client.Recv()
 		if err != nil {
-			if c.isStopped() {
-				return
-			}
 			log.Errorf("batchRecvLoop error when receive: %v", err)
 
-			// Hold the lock to forbid batchSendLoop using the old client.
-			c.clientLock.Lock()
-			c.failPendingRequests(err) // fail all pending requests.
-			for {                      // try to re-create the streaming in the loop.
+			for { // try to re-create the streaming in the loop.
+				if c.isStopped() {
+					return
+				}
+				// Hold the lock to forbid batchSendLoop using the old client.
+				c.clientLock.Lock()
+				c.failPendingRequests(err) // fail all pending requests.
+
 				// Re-establish a application layer stream. TCP layer is handled by gRPC.
 				tikvClient := tikvpb.NewTikvClient(c.conn)
 				streamClient, err := tikvClient.BatchCommands(context.TODO())
+				c.clientLock.Unlock()
+
 				if err == nil {
 					log.Infof("batchRecvLoop re-create streaming success")
 					c.client = streamClient
@@ -122,7 +125,6 @@ func (c *batchCommandsClient) batchRecvLoop() {
 				// TODO: Use a more smart backoff strategy.
 				time.Sleep(time.Second)
 			}
-			c.clientLock.Unlock()
 			continue
 		}
 
